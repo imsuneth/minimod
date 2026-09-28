@@ -65,6 +65,8 @@ void load_ref(const char * genome) {
         MALLOC_CHK(ref_name);
         strcpy(ref_name, seq->name.s);
         ref->ref_seq_length = seq->seq.l;
+        ref->is_context = NULL;      // only filled in by load_ref_contexts
+        ref->is_context_rev = NULL;
         ref->forward = (char *) malloc(seq->seq.l + 1);
         MALLOC_CHK(ref->forward);
         strcpy(ref->forward, seq->seq.s);
@@ -243,9 +245,11 @@ void destroy_ref(int n_mod_codes) {
     for (k = kh_begin(ref_map); k != kh_end(ref_map); ++k) {
         if (kh_exist(ref_map, k)) {
             ref_t * ref = kh_value(ref_map, k);
-            for (int i = 0; i < n_mod_codes; i++) {
-                free(ref->is_context[i]);
-                free(ref->is_context_rev[i]);
+            if (ref->is_context != NULL) {
+                for (int i = 0; i < n_mod_codes; i++) {
+                    free(ref->is_context[i]);
+                    free(ref->is_context_rev[i]);
+                }
             }
             char * ref_name = (char *) kh_key(ref_map, k);
             free(ref_name);

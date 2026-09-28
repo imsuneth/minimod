@@ -86,7 +86,7 @@ KHASH_MAP_INIT_STR(viewm, view_t *);
 /* summary map */
 KHASH_MAP_INIT_STR(summarym, int);
 
-enum subtool {VIEW=0, FREQ=1, SUMMARY=2};
+enum subtool {VIEW=0, FREQ=1, SUMMARY=2, VARFREQ=3};
 
 /* user specified options */
 typedef struct {
@@ -105,6 +105,10 @@ typedef struct {
     khash_t(modcodesm) *modcodes_map;
     char * bam_file;
     char * ref_file;
+    char * vcf_file;    //phased VCF with the insertions, only for varfreq
+    int32_t flank;      //reference flank used when aligning a read to the ALT allele
+    int32_t min_flank;  //minimum reference flank a read has to provide
+    int32_t band;       //ksw2 band width on top of the target/query length difference
     char* output_file;
     FILE* output_fp;
     int progress_interval;

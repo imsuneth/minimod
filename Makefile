@@ -12,6 +12,9 @@ OBJ = $(BUILD_DIR)/main.o \
       $(BUILD_DIR)/view_main.o \
 	  $(BUILD_DIR)/freq_main.o \
 	  $(BUILD_DIR)/summary_main.o \
+	  $(BUILD_DIR)/varfreq_main.o \
+	  $(BUILD_DIR)/varmod.o \
+	  $(BUILD_DIR)/ksw2_extd.o \
       $(BUILD_DIR)/thread.o \
 	  $(BUILD_DIR)/misc.o \
 	  $(BUILD_DIR)/misc_p.o \
@@ -24,7 +27,7 @@ ifdef asan
 	LDFLAGS += -fsanitize=address -fno-omit-frame-pointer
 endif
 
-.PHONY: clean distclean test install uninstall
+.PHONY: clean distclean test varfreqtest varfreqmemtest install uninstall
 
 $(BINARY): htslib/libhts.a $(OBJ)
 	$(CC) $(CFLAGS) $(OBJ) htslib/libhts.a $(LDFLAGS) -o $@
@@ -44,6 +47,15 @@ $(BUILD_DIR)/freq_main.o: src/freq_main.c src/error.h src/minimod.h
 $(BUILD_DIR)/summary_main.o: src/summary_main.c src/error.h src/minimod.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< -c -o $@
 
+$(BUILD_DIR)/varfreq_main.o: src/varfreq_main.c src/error.h src/minimod.h src/varmod.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< -c -o $@
+
+$(BUILD_DIR)/varmod.o: src/varmod.c src/varmod.h src/minimod.h src/ksw2.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< -c -o $@
+
+$(BUILD_DIR)/ksw2_extd.o: src/ksw2_extd.c src/ksw2.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< -c -o $@
+
 $(BUILD_DIR)/thread.o: src/thread.c src/minimod.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< -c -o $@
 
@@ -56,7 +68,7 @@ $(BUILD_DIR)/misc_p.o: src/misc_p.c src/misc.h
 $(BUILD_DIR)/error.o: src/error.c src/error.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< -c -o $@
 
-$(BUILD_DIR)/mod.o: src/mod.c src/mod.h
+$(BUILD_DIR)/mod.o: src/mod.c src/mod.h src/minimod.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< -c -o $@
 
 $(BUILD_DIR)/ref.o: src/ref.c src/kseq.h src/error.h
@@ -96,10 +108,19 @@ release: distclean
 	mv minimod-$(VERSION)/minimod minimod
 	rm -rf minimod-$(VERSION)
 	test/test.sh
+	test/varfreq_test.sh
 
 test: $(BINARY)
 	./test/test.sh
+	./test/varfreq_test.sh
 
 memtest: $(BINARY)
 	./test/test.sh mem
+
+varfreqtest: $(BINARY)
+	./test/varfreq_test.sh
+
+# not part of memtest, valgrind over the varfreq fixture is too slow for CI
+varfreqmemtest: $(BINARY)
+	./test/varfreq_test.sh mem
 

@@ -18,6 +18,7 @@ Minimod reads base modification information encoded under `MM:Z` and `ML:B:C` SA
 - [minimod view](#minimod-view)
 - [minimod freq](#minimod-freq)
 - [minimod summary](#minimod-summary)
+- [minimod varfreq](#minimod-varfreq)
 - [How skipped bases are handled](#how-skipped-bases-are-handled)
 - [Modification codes and contexts](#modification-codes-and-contexts)
 - [Modification probability](#modification-probability)
@@ -67,6 +68,7 @@ command:
          view       view base modifications
          freq       output base modifications frequencies
          summary    output summary
+         varfreq    output base modification frequencies in insertion structural variants
 ```
 
 Note: <i>freq</i> was previously <i>mod-freq</i> which still works but will be deprecated soon.
@@ -87,6 +89,9 @@ minimod freq -c m[CG],h[CG] -m 0.8,0.7 ref.fa reads.bam > mods.tsv
 
 # summary of available modifications and counts
 minimod summary reads.bam > summary.tsv
+
+# 5mC methylation frequencies at CG contexts inside insertion structural variants
+minimod varfreq -b ref.fa reads.bam variants.vcf > varfreqs.bedmethyl
 ```
 - See [how modification codes can be specified?](#modification-codes-and-contexts)
 - See [how threshold is used in minimod?](#modification-threshold)
@@ -276,6 +281,102 @@ canonical_base(character such as ACGTN)|mod_code(character or ChEBI number)|stat
 Status flag describes how skipped bases should be interpreted by downstream tools.
 - **.** : skipped bases should be assumed to have low probability of modifications.
 - **?** : there is no information about the modification status of skipped bases
+
+# minimod varfreq
+```bash
+minimod varfreq ref.fa reads.bam variants.vcf > varfreqs.tsv
+```
+This writes base modification frequencies at CG contexts that lie **inside insertion structural
+variants**, which by definition are absent from the reference genome. It takes a haplotagged BAM,
+the reference, and a phased VCF from [sniffles](https://github.com/fritzsedlazeck/Sniffles).
+
+```bash
+Usage: minimod varfreq ref.fa reads.bam variants.vcf
+
+basic options:
+   -b                         output in bedMethyl format [not set]
+   -c STR                     modification code(s) (eg. m, h or mh or as ChEBI) [m]
+   -m FLOAT                   min modification threshold(s). Comma separated values for each modification code given in -c [0.8]
+   -t INT                     number of processing threads [8]
+   -K INT                     batch size (max number of reads loaded at once) [512]
+   -B FLOAT[K/M/G]            max number of bases loaded at once [20.0M]
+   -w INT                     reference flank each side of the insertion when aligning [200]
+   -h                         help
+   -p INT                     print progress every INT seconds (0: per batch) [0]
+   -o FILE                    output file [stdout]
+   --verbose INT              verbosity level [4]
+   --version                  print version
+
+advanced options:
+   --min-flank INT            skip a read providing less reference flank than this [50]
+   --band INT                 alignment band width on top of the length difference [100]
+   --debug-break INT          break after processing the specified no. of batches
+```
+
+## How it works
+
+1. **Variants.** Only `SVTYPE=INS` records that are `PASS`, carry an explicit (non-symbolic) ALT
+   sequence, and have a usable genotype (`1|0`, `0|1`, `1|1` or `1/1`) are used. Everything else
+   is skipped and counted in the log.
+2. **Reads.** The supporting reads are taken from each record's `RNAMES` INFO field, which
+   sniffles writes when run with `--output-rnames`. Only primary alignments are used, and only
+   when the read's `HP` tag matches the haplotype the phased genotype places the ALT on. Reads
+   with no `HP` tag and reads whose `HP` contradicts the genotype are counted in the log but not
+   used.
+3. **Placing the read on the insertion.** Reads disagree about where an insertion starts and how
+   long it is, especially in repeats, so the read cannot simply be indexed by its own CIGAR. For
+   each read the ALT allele is rebuilt as `ref[POS-w .. POS] + inserted bases + ref[POS+1 .. POS+w]`
+   and the matching stretch of the read is globally aligned to it with
+   [ksw2](https://github.com/lh3/ksw2), using minimap2's ONT scoring. The flanks pin both ends, so
+   a read whose insertion was placed a few bases away still lands on the right offsets.
+4. **Sites.** The CG dinucleotides of the ALT define the rows. A read contributes only where the
+   alignment puts one of its bases on the site *and* that base matches the ALT base there.
+
+## Offsets
+
+`ins_offset` counts into the inserted sequence, and names the position of the C of the CpG. On the
+reverse strand the C of the CpG is the G of the forward strand, so its offset is one higher.
+
+| ins_offset of the C | region | the CpG is |
+|----|----|----|
+| 0 | `JUNCTION_5P` | the reference anchor base + the first inserted base |
+| 1 .. SVLEN-1 | `INTERNAL` | both bases inserted |
+| SVLEN | `JUNCTION_3P` | the last inserted base + the reference base after the anchor |
+
+**Sample varfreqs.tsv output**
+The output entries are sorted by reference contig, reference position, variant, offset, strand and
+modification code.
+```bash
+contig	start	end	strand	n_called	n_mod	freq	mod_code	var_id	ins_offset	region	alt_hap	svlen	n_carrier
+chr22	2116386	2116387	+	9	3	0.333333	m	Sniffles2.INS.B9S15	102	INTERNAL	1	1906	20
+chr22	2116386	2116387	-	9	5	0.555556	m	Sniffles2.INS.B9S15	103	INTERNAL	1	1906	20
+chr22	2116386	2116387	+	8	6	0.750000	m	Sniffles2.INS.B9S15	280	INTERNAL	1	1906	20
+chr22	2116386	2116387	-	8	6	0.750000	m	Sniffles2.INS.B9S15	281	INTERNAL	1	1906	20
+```
+
+| Field    | Type | Definition    |
+|----------|-------------|-------------|
+| 1. contig | str | chromosome |
+| 2. start | int | position (0-based) of the insertion's anchor base. **The same for every row of one insertion**, since inserted bases have no reference coordinate |
+| 3. end   | int | start + 1 |
+| 4. strand | char | strand (+/-) of the read |
+| 5. n_called | int | number of reads called for base modification at this site |
+| 6. n_mod | int | number of reads with base modification at this site |
+| 7. freq | float | n_mod/n_called ratio |
+| 8. mod_code | char | base modification code as in [SAMtags: 1.7 Base modifications](https://github.com/samtools/hts-specs/blob/master/SAMtags.pdf) |
+| 9. var_id | str | the VCF ID of the insertion |
+| 10. ins_offset | int | offset of the site within the inserted sequence, see above |
+| 11. region | str | `JUNCTION_5P`, `INTERNAL` or `JUNCTION_3P` |
+| 12. alt_hap | str | haplotype carrying the ALT: `1`, `2`, or `1,2` when hom-alt |
+| 13. svlen | int | length of the inserted sequence |
+| 14. n_carrier | int | reads that contributed at least one site to this insertion. The same for every row of one insertion |
+
+With `-b` the same fields are appended after the eleven bedMethyl columns, so `var_id` is column
+12 and `n_carrier` is column 17.
+
+Note that a `+` row is only ever contributed to by forward-strand reads and a `-` row only by
+reverse-strand reads, exactly as in `minimod freq`, so each row sees roughly half the reads of
+`n_carrier`.
 
 # How skipped bases are handled
 Modified base positions are encoded in MM tag as a series of integers each indicating how many bases to be skipped before the next modified base. For an example, if the MM tag starts with **C+m.**, the skipped bases should be considered to have low probability. Otherwise, if the MM tag starts with **C+m?**,  the probability of skipped bases are unknown. 

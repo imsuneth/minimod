@@ -39,6 +39,7 @@ SOFTWARE.
 
 #include "minimod.h"
 #include "mod.h"
+#include "varmod.h"
 #include "misc.h"
 #include "error.h"
 #include "khash.h"
@@ -129,7 +130,7 @@ core_t* init_core(opt_t opt,double realtime0) {
     //     }
     // }
 
-    if (opt.subtool == FREQ) {
+    if (opt.subtool == FREQ || opt.subtool == VARFREQ) {
         core->freq_map = kh_init(freqm);
     }
     
@@ -153,7 +154,7 @@ void free_core(core_t* core,opt_t opt) {
     // hts_idx_destroy(core->bam_idx);
     sam_close(core->bam_fp);
 
-    if (opt.subtool == FREQ) {
+    if (opt.subtool == FREQ || opt.subtool == VARFREQ) {
         destroy_freq_map(core->freq_map);
     }
 
@@ -200,7 +201,7 @@ db_t* init_db(core_t* core) {
     MALLOC_CHK(db->mod_codes_cap);
     
 
-    if(core->opt.subtool == FREQ) {
+    if(core->opt.subtool == FREQ || core->opt.subtool == VARFREQ) {
         db->freq_maps = (khash_t(freqm)**)(malloc(sizeof(khash_t(freqm)*) * db->cap_bam_recs));
         MALLOC_CHK(db->freq_maps);
     } else if (core->opt.subtool == VIEW) {
@@ -272,6 +273,17 @@ ret_status_t load_db(core_t* core, db_t* db) {
             continue;
         }
 
+        if(core->opt.subtool == VARFREQ){
+            if(rec->core.flag & (BAM_FSECONDARY|BAM_FSUPPLEMENTARY)){
+                LOG_TRACE("Skipping non-primary alignment %s",bam_get_qname(rec));
+                continue;
+            }
+            if(!read_has_variants(bam_get_qname(rec))){
+                LOG_TRACE("Skipping read %s that does not support any insertion",bam_get_qname(rec));
+                continue;
+            }
+        }
+
         if(rec->core.l_qseq == 0){
             LOG_TRACE("Skipping read with 0 length %s",bam_get_qname(rec));
             continue;
@@ -312,7 +324,7 @@ ret_status_t load_db(core_t* core, db_t* db) {
         db->ml_lens[i] = ml_len;
         db->ml[i] = ml;
 
-        if(core->opt.subtool == FREQ) {
+        if(core->opt.subtool == FREQ || core->opt.subtool == VARFREQ) {
             db->freq_maps[i] = kh_init(freqm);
         } else if (core->opt.subtool == VIEW) {
             db->view_maps[i] = kh_init(viewm);
@@ -337,6 +349,8 @@ void work_per_single_read(core_t* core,db_t* db, int32_t i){
         freq_view_single(core, db, i);
     } else if (core->opt.subtool == SUMMARY) {
         summary_single(core, db, i);
+    } else if (core->opt.subtool == VARFREQ) {
+        varfreq_single(core, db, i);
     }
     
 }
@@ -389,6 +403,8 @@ void output_core(core_t* core) {
 
     if(core->opt.subtool == FREQ){
         print_freq_output(core);
+    } else if(core->opt.subtool == VARFREQ){
+        print_varfreq_output(core);
     }
 
 }
@@ -409,7 +425,7 @@ void free_db_tmp(core_t* core, db_t* db) {
         }
 
         // destroy freq map except key
-        if(core->opt.subtool == FREQ) {
+        if(core->opt.subtool == FREQ || core->opt.subtool == VARFREQ) {
             for (khiter_t k = kh_begin(db->freq_map[i]); k != kh_end(db->freq_maps[i]); ++k) {
                 if (kh_exist(db->freq_maps[i], k)) {
                     char *key = (char*) kh_key(db->freq_maps[i], k);
@@ -456,7 +472,7 @@ void free_db(core_t* core, db_t* db) {
         bam_destroy1(db->bam_recs[i]);
     }
 
-    if(core->opt.subtool == FREQ) {
+    if(core->opt.subtool == FREQ || core->opt.subtool == VARFREQ) {
         free(db->freq_maps);
     } else if (core->opt.subtool == VIEW) {
         free(db->view_maps);
@@ -497,6 +513,11 @@ void init_opt(opt_t* opt) {
     opt->ref_file = NULL;
     opt->mod_codes_str = NULL;
     opt->mod_threshes_str = NULL;
+
+    opt->vcf_file = NULL;
+    opt->flank = 200;
+    opt->min_flank = 50;
+    opt->band = 100;
 
     opt->haplotypes = 0;
     opt->insertions = 0;

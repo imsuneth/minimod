@@ -46,3 +46,5 @@ Thumbs.db
 
 # test related
 /test/tmp
+# the varfreq test reference is bgzipped, keep it despite the *.gz rule above
+!/test/data/varfreq/*.fa.gz
