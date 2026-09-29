@@ -40,8 +40,6 @@ typedef struct {
     char * id;          // variant id from the VCF (eg. Sniffles2.INS.5B0S15)
     char * ins_seq;     // the inserted bases only (ALT without the leading anchor base)
     int ins_len;        // length of ins_seq
-    char ref_base;      // the reference base at pos, as the VCF spells it
-    int usable;         // 0 once the variant is dropped, eg. it disagrees with the reference
     int alt_hap;        // haplotype carrying the ALT. 1, 2, or 0 when hom-alt (both)
     int n_carrier;      // number of reads that were actually used for this variant
 } var_t;
@@ -51,10 +49,6 @@ void load_variants(const char * vcf_file);
 
 /* free everything load_variants allocated */
 void destroy_variants();
-
-/* drop variants whose contig or anchor base does not agree with the reference.
-   call this after load_ref */
-void check_variants_against_ref();
 
 /* 1 if this read name supports at least one of the loaded variants */
 int read_has_variants(const char * qname);

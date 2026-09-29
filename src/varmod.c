@@ -31,6 +31,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <assert.h>
 #include <pthread.h>
 
@@ -85,9 +86,9 @@ typedef struct {
     int * idx;
     int n;
     int cap;
-} varlist_t;
+} var_list_t;
 
-KHASH_MAP_INIT_STR(readm, varlist_t *)
+KHASH_MAP_INIT_STR(readm, var_list_t *)
 static khash_t(readm) * read_map = NULL;
 
 /* counters filled while reading the VCF (single threaded) */
@@ -118,9 +119,16 @@ static inline uint8_t encode_base(char c) {
     return 4;
 }
 
-/*************************************************
- * reading the VCF                               *
- *************************************************/
+
+/* Check if ALT is a  symbolic ALT or or other non-derivable format */
+static int alt_not_derivable(const char * alt, int alt_len) {
+    if (alt_len == 0) return 1;                             // no sequence to substitute
+    if (alt_len == 1 && alt[0] == '*') return 1;            // allele missing due to an upstream deletion
+    if (strchr(alt, '<') || strchr(alt, '>')) return 1;     // symbolic: <INS>, <DEL>, and the C<ctg1> shorthand
+    if (strchr(alt, '[') || strchr(alt, ']')) return 1;     // mated breakend, eg. G]1:10000]
+    if (alt[0] == '.' || alt[alt_len - 1] == '.') return 1; // single breakend, eg. G. or .TGCA
+    return 0;
+}
 
 /* which haplotype carries the ALT?
    returns 1 or 2 for a phased het, 0 when hom-alt (both), -1 when we cannot tell */
@@ -146,7 +154,7 @@ static int get_alt_hap(bcf_hdr_t * hdr, bcf1_t * rec, int32_t ** gt, int * gt_ca
 }
 
 /* add one variant to the array and return its index */
-static int add_variant(const char * chrom, int pos, const char * id, const char * ins_seq, int ins_len, int alt_hap, char ref_base) {
+static int add_variant(const char * chrom, int pos, const char * id, const char * ins_seq, int ins_len, int alt_hap) {
     if (n_variants == cap_variants) {
         cap_variants = cap_variants ? cap_variants * 2 : 1024;
         variants = (var_t *)realloc(variants, sizeof(var_t) * cap_variants);
@@ -165,24 +173,21 @@ static int add_variant(const char * chrom, int pos, const char * id, const char 
 
     var->ins_seq = (char *)malloc(ins_len + 1);
     MALLOC_CHK(var->ins_seq);
-    for (int i = 0; i < ins_len; i++) {
-        char b = ins_seq[i];
-        var->ins_seq[i] = (b >= 'a' && b <= 'z') ? b - 32 : b; // the reference is uppercase, match it
+    for (int i = 0; i < ins_len; i++) { // the reference is uppercased, match it
+        var->ins_seq[i] = toupper((unsigned char)ins_seq[i]);
     }
     var->ins_seq[ins_len] = '\0';
 
     var->pos = pos;
     var->ins_len = ins_len;
     var->alt_hap = alt_hap;
-    var->ref_base = (ref_base >= 'a' && ref_base <= 'z') ? ref_base - 32 : ref_base;
-    var->usable = 1;
     var->n_carrier = 0;
 
     n_variants++;
     return n_variants - 1;
 }
 
-/* remember that this read name supports this variant */
+/* record that this read name supports this variant */
 static void add_read_name(const char * name, int var_idx) {
     int ret;
     khiter_t k = kh_get(readm, read_map, name);
@@ -194,9 +199,9 @@ static void add_read_name(const char * name, int var_idx) {
 
         k = kh_put(readm, read_map, key, &ret);
 
-        varlist_t * vl = (varlist_t *)malloc(sizeof(varlist_t));
+        var_list_t * vl = (var_list_t *)malloc(sizeof(var_list_t));
         MALLOC_CHK(vl);
-        vl->cap = 4;
+        vl->cap = 2;
         vl->n = 0;
         vl->idx = (int *)malloc(sizeof(int) * vl->cap);
         MALLOC_CHK(vl->idx);
@@ -204,7 +209,7 @@ static void add_read_name(const char * name, int var_idx) {
         kh_value(read_map, k) = vl;
     }
 
-    varlist_t * vl = kh_value(read_map, k);
+    var_list_t * vl = kh_value(read_map, k);
     if (vl->n == vl->cap) {
         vl->cap *= 2;
         vl->idx = (int *)realloc(vl->idx, sizeof(int) * vl->cap);
@@ -263,7 +268,7 @@ void load_variants(const char * vcf_file) {
         char * alt_allele = rec->d.allele[1];
         int ref_len = strlen(ref_allele);
         int alt_len = strlen(alt_allele);
-        if (alt_allele[0] == '<' || ref_len != 1 || alt_len < 3) {
+        if (alt_not_derivable(alt_allele, alt_len) || ref_len != 1 || alt_len < 2) {
             n_vcf_bad_alt++;
             continue;
         }
@@ -283,8 +288,24 @@ void load_variants(const char * vcf_file) {
 
         // the first ALT base is the anchor base, the insertion is everything after it
         const char * chrom = bcf_hdr_id2name(hdr, rec->rid);
+
+        // 6. the record has to agree with the reference we were given.
+        ref_t * ref = get_ref(chrom);
+        if (ref == NULL) {
+            n_vcf_no_contig++;
+            continue;
+        }
+        if (rec->pos < 0 || rec->pos >= ref->ref_seq_length) {
+            n_vcf_ref_mismatch++;
+            continue;
+        }
+        if (ref->forward[rec->pos] != toupper((unsigned char)ref_allele[0])) {
+            n_vcf_ref_mismatch++;
+            continue;
+        }
+
         const char * id = (rec->d.id && rec->d.id[0] != '.') ? rec->d.id : "*";
-        int var_idx = add_variant(chrom, rec->pos, id, alt_allele + 1, alt_len - 1, alt_hap, ref_allele[0]);
+        int var_idx = add_variant(chrom, rec->pos, id, alt_allele + 1, alt_len - 1, alt_hap);
 
         // RNAMES is a comma separated list
         char * name = strtok(rnames, ",");
@@ -301,45 +322,17 @@ void load_variants(const char * vcf_file) {
     bcf_hdr_destroy(hdr);
     bcf_close(fp);
 
-    INFO("Loaded %d insertion variants supported by %d read names", n_variants, kh_size(read_map));
-
-    if (n_variants == 0) {
-        WARNING("%s", "No usable insertion variants found in the VCF. The output will be empty.");
-    }
-}
-
-void check_variants_against_ref() {
-
-    for (int i = 0; i < n_variants; i++) {
-        var_t * var = &variants[i];
-
-        ref_t * ref = get_ref(var->chrom);
-        if (ref == NULL) {
-            var->usable = 0;
-            n_vcf_no_contig++;
-            continue;
-        }
-
-        if (var->pos < 0 || var->pos >= ref->ref_seq_length) {
-            var->usable = 0;
-            n_vcf_ref_mismatch++;
-            continue;
-        }
-
-        // the anchor base in the VCF has to be the base the reference has there, otherwise
-        // the VCF was called against a different reference. an N there is no good either,
-        // the flanks would be N as well and the alignment would mean nothing.
-        if (ref->forward[var->pos] != var->ref_base) {
-            var->usable = 0;
-            n_vcf_ref_mismatch++;
-        }
-    }
-
     if (n_vcf_no_contig > 0) {
         WARNING("%ld variants are on a contig the reference does not have. They are skipped.", (long)n_vcf_no_contig);
     }
     if (n_vcf_ref_mismatch > 0) {
         WARNING("%ld variants do not match the reference base at their position. They are skipped. Is this the reference the VCF was called against?", (long)n_vcf_ref_mismatch);
+    }
+
+    INFO("Loaded %d insertion variants supported by %d read names", n_variants, kh_size(read_map));
+
+    if (n_variants == 0) {
+        WARNING("%s", "No usable insertion variants found in the VCF. The output will be empty.");
     }
 }
 
@@ -364,7 +357,7 @@ void destroy_variants() {
         for (khiter_t k = kh_begin(read_map); k != kh_end(read_map); ++k) {
             if (kh_exist(read_map, k)) {
                 char * key = (char *)kh_key(read_map, k);
-                varlist_t * vl = kh_value(read_map, k);
+                var_list_t * vl = kh_value(read_map, k);
                 free(vl->idx);
                 free(vl);
                 free(key);
@@ -375,11 +368,7 @@ void destroy_variants() {
     }
 }
 
-/*************************************************
- * the frequency map                             *
- *************************************************/
-
-/* key layout: chrom \t pos \t var_idx \t offset \t strand \t mod_code */
+/* key: chrom \t pos \t var_idx \t offset \t strand \t mod_code */
 static char * make_var_key(const char * chrom, int pos, int var_idx, int offset, char strand, const char * mod_code) {
     int len = strlen(chrom) + strlen(mod_code) + 48;
     char * key = (char *)malloc(len);
@@ -458,9 +447,6 @@ static void update_var_map(khash_t(freqm) * freq_map, const char * chrom, int po
     }
 }
 
-/*************************************************
- * placing a read on the ALT allele              *
- *************************************************/
 
 /* walk the CIGAR and find the read positions aligned to ref_lo and ref_hi.
    lo gets the first aligned read base at or after ref_lo,
@@ -536,7 +522,7 @@ static int mark_sites_for_variant(core_t * core, bam1_t * record, ref_t * ref, i
         return 0;
     }
 
-    // 2. the matching stretch of the read
+    // 2. the matching region of the read
     int read_lo, read_hi;
     find_read_window(record, ref_lo, ref_hi, &read_lo, &read_hi);
     if (read_lo < 0 || read_hi <= read_lo) {
@@ -590,6 +576,14 @@ static int mark_sites_for_variant(core_t * core, bam1_t * record, ref_t * ref, i
     for (int i = 0; i < q_len; i++) query[i] = encode_base(seq_nt16_str[bam_seqi(seq, read_lo + i)]);
 
     int8_t mat[25];
+    /*
+        A    C    G    T    N
+    A  +2   -4   -4   -4    0
+    C  -4   +2   -4   -4    0
+    G  -4   -4   +2   -4    0
+    T  -4   -4   -4   +2    0
+    N   0    0    0    0    0
+    */
     for (int i = 0; i < 5; i++) {
         for (int j = 0; j < 5; j++) {
             if (i == 4 || j == 4) mat[i * 5 + j] = 0; // N matches nothing in particular
@@ -613,13 +607,15 @@ static int mark_sites_for_variant(core_t * core, bam1_t * record, ref_t * ref, i
         int len = ez.cigar[c] >> 4;
         int op = ez.cigar[c] & 0xf;
 
-        if (op == 0) { // both the read and the ALT advance
+        if (op == 0) { // in both the read and the ALT
             for (int j = 0; j < len; j++) {
                 int t = ti + j;
-                if (target_site[t] < 0) continue;
+                if (target_site[t] < 0) continue; // not a CpG site
                 int read_pos = read_lo + qi + j;
+
                 // two insertions this close would both claim the same read base
                 if (site_var[read_pos] >= 0 && site_var[read_pos] != var_idx) clash++;
+                
                 site_var[read_pos] = var_idx;
                 site_off[read_pos] = target_site[t];
                 site_base[read_pos] = target_char[t];
@@ -650,10 +646,6 @@ static int mark_sites_for_variant(core_t * core, bam1_t * record, ref_t * ref, i
 
     return used;
 }
-
-/*************************************************
- * reading the MM/ML tags                        *
- *************************************************/
 
 /* is this modification code one the user asked for? NULL when it is not */
 static modcodem_t * get_required_mod(core_t * core, char * mod_code) {
@@ -892,9 +884,6 @@ static void count_calls(core_t * core, db_t * db, int32_t bam_i, int * site_var,
     }
 }
 
-/*************************************************
- * one read                                      *
- *************************************************/
 
 void varfreq_single(core_t * core, db_t * db, int32_t bam_i) {
 
@@ -908,24 +897,24 @@ void varfreq_single(core_t * core, db_t * db, int32_t bam_i) {
     // 1. the variants this read was listed as supporting
     khiter_t k = kh_get(readm, read_map, qname);
     if (k == kh_end(read_map)) return;
-    varlist_t * vl = kh_value(read_map, k);
+    var_list_t * vl = kh_value(read_map, k);
 
     ref_t * ref = get_ref(tname);
-    if (ref != NULL) {
-        ASSERT_MSG(ref->ref_seq_length == (int)hdr->target_len[tid],
-                   "Contig %s is %d bases in the reference but %d in the bam header. Is this the reference the bam was aligned to?\n",
-                   tname, ref->ref_seq_length, (int)hdr->target_len[tid]);
-    }
     if (ref == NULL) { // the read is aligned somewhere the reference does not cover
         pthread_mutex_lock(&var_mutex);
         n_read_wrong_contig += vl->n;
         pthread_mutex_unlock(&var_mutex);
         return;
     }
+    ASSERT_MSG(ref->ref_seq_length == (int)hdr->target_len[tid],
+                "Contig %s is %d bases in the reference but %d in the bam header. Is this the reference the bam was aligned to?\n",
+                tname, ref->ref_seq_length, (int)hdr->target_len[tid]);
+
 
     int hp = get_hp_tag(record);
 
     // 2. marks on the read: which variant, which offset and which base we expect
+    // TO-DO: allocate these in laod_db
     int * site_var = (int *)malloc(sizeof(int) * seq_len);
     MALLOC_CHK(site_var);
     int * site_off = (int *)malloc(sizeof(int) * seq_len);
@@ -940,28 +929,26 @@ void varfreq_single(core_t * core, db_t * db, int32_t bam_i) {
     }
 
     // 3. place the read on each variant it supports
-    int any = 0;
+    int count = 0;
     for (int v = 0; v < vl->n; v++) {
         int var_idx = vl->idx[v];
         var_t * var = &variants[var_idx];
 
-        if (!var->usable) continue;
-
-        if (strcmp(var->chrom, tname) != 0) { // the read is listed here but aligned elsewhere
+        if (strcmp(var->chrom, tname) != 0) { // read contig doesn't match variant contig
             pthread_mutex_lock(&var_mutex);
             n_read_wrong_contig++;
             pthread_mutex_unlock(&var_mutex);
             continue;
         }
 
-        if (hp == 0) { // whatshap could not tag this read
+        if (hp == 0) { // no haplotype tag
             pthread_mutex_lock(&var_mutex);
             n_read_no_hp++;
             pthread_mutex_unlock(&var_mutex);
             continue;
         }
 
-        if (var->alt_hap != 0 && hp != var->alt_hap) { // tagged as the other haplotype
+        if (var->alt_hap != 0 && hp != var->alt_hap) { // read haplotype tag does not match variant haplotype
             pthread_mutex_lock(&var_mutex);
             n_read_hp_mismatch++;
             pthread_mutex_unlock(&var_mutex);
@@ -969,12 +956,12 @@ void varfreq_single(core_t * core, db_t * db, int32_t bam_i) {
         }
 
         if (mark_sites_for_variant(core, record, ref, var_idx, site_var, site_off, site_base)) {
-            any = 1;
+            count = 1;
         }
     }
 
     // 4. one pass over the MM/ML tags for everything we marked
-    if (any) {
+    if (count) {
         count_calls(core, db, bam_i, site_var, site_off, site_base);
     }
 
@@ -983,12 +970,7 @@ void varfreq_single(core_t * core, db_t * db, int32_t bam_i) {
     free(site_var);
 }
 
-/*************************************************
- * output                                        *
- *************************************************/
-
-/* where the CpG sits relative to the insertion. offset is what we report,
-   so on the - strand the C of the CpG is one base earlier. */
+/* where the CpG sits relative to the insertion. */
 static const char * site_region(var_t * var, int offset, char strand) {
     int o = (strand == '+') ? offset : offset - 1;
     if (o == 0) return "JUNCTION_5P";

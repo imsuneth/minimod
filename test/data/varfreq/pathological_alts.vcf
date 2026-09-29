@@ -1,0 +1,20 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr22,length=51324926>
+##FILTER=<ID=PASS,Description="All filters passed">
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="Type of structural variation">
+##INFO=<ID=SVLEN,Number=1,Type=Integer,Description="Length of structural variation">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End position of structural variation">
+##INFO=<ID=SUPPORT,Number=1,Type=Integer,Description="Number of reads supporting the structural variation">
+##INFO=<ID=RNAMES,Number=.,Type=String,Description="Names of supporting reads">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DR,Number=1,Type=Integer,Description="Number of reference reads">
+##FORMAT=<ID=DV,Number=1,Type=Integer,Description="Number of variant reads">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chr22	2116387	SYMBOLIC	T	<INS>	60	PASS	SVTYPE=INS;SVLEN=100;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9
+chr22	2116387	CTG_SHORTHAND	C	C<ctg1>	60	PASS	SVTYPE=INS;SVLEN=100;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9
+chr22	2116387	MATED_BND	G	G]chr22:10000]	60	PASS	SVTYPE=INS;SVLEN=100;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9
+chr22	2116387	SINGLE_BND_LEFT	T	.TGCAGGCGCAGG	60	PASS	SVTYPE=INS;SVLEN=12;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9
+chr22	2116387	SINGLE_BND_RIGHT	T	TGCAGGCGCAGG.	60	PASS	SVTYPE=INS;SVLEN=12;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9
+chr22	2116387	STAR_ALLELE	T	*	60	PASS	SVTYPE=INS;SVLEN=1;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9
+chr22	2116387	MULTIBASE_REF	TGC	TGCGGCGCAGGCGCA	60	PASS	SVTYPE=INS;SVLEN=12;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9
+chr22	2116387	ZERO_LENGTH	T	T	60	PASS	SVTYPE=INS;SVLEN=0;END=2116387;SUPPORT=9;RNAMES=r1,r2	GT:DR:DV	1|0:5:9

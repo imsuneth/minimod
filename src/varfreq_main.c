@@ -298,20 +298,16 @@ int varfreq_main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    //load the insertions and the read names that support them
     double realtime1 = realtime();
-    fprintf(stderr, "[%s] Loading variants %s\n", __func__, opt.vcf_file);
-    load_variants(opt.vcf_file);
-    fprintf(stderr, "[%s] Variants loaded in %.3f sec\n", __func__, realtime()-realtime1);
-
-    //load the reference genome. varfreq takes its CpG context from the ALT allele,
-    //so there is no need to precompute the contexts in the reference
-    double realtime2 = realtime();
     fprintf(stderr, "[%s] Loading reference genome %s\n", __func__, opt.ref_file);
     load_ref(opt.ref_file);
-    fprintf(stderr, "[%s] Reference genome loaded in %.3f sec\n", __func__, realtime()-realtime2);
+    fprintf(stderr, "[%s] Reference genome loaded in %.3f sec\n", __func__, realtime()-realtime1);
 
-    check_variants_against_ref();
+    //load the insertions and the read names that support them
+    double realtime2 = realtime();
+    fprintf(stderr, "[%s] Loading variants %s\n", __func__, opt.vcf_file);
+    load_variants(opt.vcf_file);
+    fprintf(stderr, "[%s] Variants loaded in %.3f sec\n", __func__, realtime()-realtime2);
 
     //initialise the core data structure
     core_t* core = init_core(opt, realtime0);

@@ -77,6 +77,15 @@ grep -E "^#|SVTYPE=DEL" $VCF > $TMP/del_only.vcf || die "${testname} failed to b
 ex ./minimod varfreq -b -t 8 $REF $BAM $TMP/del_only.vcf > $TMP/del_only.bedmethyl || die "${testname} failed"
 [ -s $TMP/del_only.bedmethyl ] && die "${testname} failed: expected no output"
 
+# every ALT here is one varfreq cannot derive a sequence from, so all 8 must be skipped
+# and nothing may be emitted. guards against a symbolic or breakend ALT being fed into
+# the aligner as if it were insertable sequence.
+testname="varfreq skips ALTs it cannot derive"
+echo -e "${BLUE}${testname}${NC}"
+ex ./minimod varfreq -b -t 8 $REF $BAM $DATA/pathological_alts.vcf > $TMP/pathological.bedmethyl 2> $TMP/pathological.log || die "${testname} failed"
+[ -s $TMP/pathological.bedmethyl ] && die "${testname} failed: expected no output"
+grep -q "8 unusable ALT" $TMP/pathological.log || die "${testname} failed: expected all 8 records to be counted as unusable ALT"
+
 testname="varfreq rejects a missing vcf"
 echo -e "${BLUE}${testname}${NC}"
 ./minimod varfreq -b $REF $BAM $TMP/does_not_exist.vcf > /dev/null 2>&1 && die "${testname} failed: expected a non-zero exit"
