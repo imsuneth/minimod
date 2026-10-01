@@ -86,6 +86,13 @@ ex ./minimod varfreq -b -t 8 $REF $BAM $DATA/pathological_alts.vcf > $TMP/pathol
 [ -s $TMP/pathological.bedmethyl ] && die "${testname} failed: expected no output"
 grep -q "8 unusable ALT" $TMP/pathological.log || die "${testname} failed: expected all 8 records to be counted as unusable ALT"
 
+# load_variants needs exactly one sample, otherwise bcf_get_genotypes returns the
+# genotypes of several samples and get_alt_hap would read two of them as one diploid call
+testname="varfreq rejects a multi-sample vcf"
+echo -e "${BLUE}${testname}${NC}"
+tr -d '\r' < $VCF | awk -F'\t' 'BEGIN{OFS="\t"} /^##/{print; next} /^#CHROM/{print $0, "SAMPLE2"; next} {print $0, $10}' > $TMP/two_samples.vcf || die "${testname} failed to build the vcf"
+./minimod varfreq -b $REF $BAM $TMP/two_samples.vcf > /dev/null 2>&1 && die "${testname} failed: expected a non-zero exit"
+
 testname="varfreq rejects a missing vcf"
 echo -e "${BLUE}${testname}${NC}"
 ./minimod varfreq -b $REF $BAM $TMP/does_not_exist.vcf > /dev/null 2>&1 && die "${testname} failed: expected a non-zero exit"

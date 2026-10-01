@@ -134,7 +134,7 @@ static int alt_not_derivable(const char * alt, int alt_len) {
    returns 1 or 2 for a phased het, 0 when hom-alt (both), -1 when we cannot tell */
 static int get_alt_hap(bcf_hdr_t * hdr, bcf1_t * rec, int32_t ** gt, int * gt_cap) {
     int n = bcf_get_genotypes(hdr, rec, gt, gt_cap);
-    if (n != 2) return -1; // we only handle a single diploid sample
+    if (n != 2) return -1; // no GT field (n < 0) or not diploid. the sample count is checked in load_variants
 
     int32_t * g = *gt;
     if (g[0] == bcf_int32_vector_end || g[1] == bcf_int32_vector_end) return -1;
@@ -229,6 +229,12 @@ void load_variants(const char * vcf_file) {
 
     bcf_hdr_t * hdr = bcf_hdr_read(fp);
     NULL_CHK(hdr);
+
+    // we only support single sample VCFs
+    if (bcf_hdr_nsamples(hdr) != 1) {
+        ERROR("VCF file %s has %d samples. This program only supports a single sample VCF.", vcf_file, bcf_hdr_nsamples(hdr));
+        exit(EXIT_FAILURE);
+    }
 
     bcf1_t * rec = bcf_init();
     NULL_CHK(rec);
